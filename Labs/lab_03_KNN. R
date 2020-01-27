@@ -1,0 +1,90 @@
+# load dataset
+library(dplyr)
+library(tidyr)
+library(corrplot)
+library(ggplot2)
+dat = read.csv("players_20.csv")
+dat = dat %>% select("wage_eur", "international_reputation", "skill_moves", "shooting", "passing", "dribbling", "defending")
+dat$wage_binary = factor(dat$wage_eur > median(dat$wage_eur))
+levels(dat$wage_binary) = c("Low", "High")
+
+summary(dat) #check missing rates and variables ranges
+dat = dat[complete.cases(dat), ] # drop any observation with missing value
+
+# seperate training and testing set
+set.seed(1)
+num = dim(dat)[1]
+id.train = sample(seq(1, num), size = num * 0.7)
+dat.train = dat[id.train, ]# training set
+dat.test = dat[-id.train, ] # testing set
+
+# data exploration
+dat.explore = gather(dat.train, key = "Variable", value = "Value", -c("wage_binary", "wage_eur"))
+head(dat.explore)
+
+ggplot(dat.explore) + geom_boxplot(aes(x = wage_binary, y = Value)) + facet_wrap(.~Variable, scales = "free_y") + theme_minimal()
+
+
+# KNN modeling
+library(class)
+
+# pull out the outcome variable and the designing matrix for the training and test data
+train_label = dat.train %>% .$wage_binary 
+train_x = dat.train %>% select("international_reputation", "skill_moves", "shooting", "passing", "dribbling", "defending")
+
+test_label = dat.test %>% .$wage_binary 
+test_x = dat.test %>% select("international_reputation", "skill_moves", "shooting", "passing", "dribbling", "defending")
+
+
+# scale both training and test data in the same way
+mean_train = colMeans(train_x)
+std_train = sqrt(diag(var(train_x)))
+# training data
+train_x = scale(train_x, center = mean_train, scale = std_train)
+# test data
+test_x = scale(test_x, center = mean_train, scale = std_train) # !!!Note: the center and std of scale always are from training data
+
+set.seed(1)
+pred_train = knn(train_x, 
+                 train_x, 
+                 train_label, 
+                 k = 1)
+
+pred_test = knn(train_x, 
+                test_x, 
+                train_label, 
+                k = 1)
+
+# Pull out the true responses for the test data
+table(pred_train, train_label)
+
+
+mean(pred_train == train_label) # mean != 1 because we have several labels for one observation and the method just pick a label randomly.
+table(pred_test, test_label)
+mean(pred_test == test_label)
+
+# look for a best k to minimize training error 
+k_range = c(5, 10, 20, 25, 50, 200, 400)
+train_error = c()
+test_error = c()
+
+for(i in 1:length(k_range)){
+  pred_train <- knn(train_x, 
+                    train_x, 
+                    train_label, 
+                    k = k_range[i])
+  train_error[i] = mean(pred_train != train_label)
+  pred_test = knn(train_x, 
+                  test_x, 
+                  train_label, 
+                  k = k_range[i])
+  test_error[i] = mean(pred_test != test_label)
+} # for each iteration in the for loop, we fit a KNN regression model using the same dataset, 
+# but with different choice of k as k[i]. We compute the training and testing error rate each round.
+
+errors = data.frame(train_error, test_error, k_range)
+ggplot(errors, aes(x = 1/k_range)) + 
+  geom_line(aes(y = train_error), col = "red") + geom_point(aes(y = train_error), col = "red") +
+  geom_line(aes(y = test_error), col = "blue") + geom_point(aes(y = test_error), col = "blue") +
+  ylab("Error Rate") + xlab("1/K") + ggtitle("Training and test error rate for KNN") + theme_minimal()
+
