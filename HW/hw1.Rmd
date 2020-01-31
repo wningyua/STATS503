@@ -1,0 +1,136 @@
+---
+title: "STATS503 HW1"
+author: "Ningyuan Wang"
+date: "1/29/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(class)
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Question 1
+a. 
+Better. Becuase we have large sample size but small number of predictors. Using flexible method and increasing model complexity may better fit large number of data. 
+b. 
+Worse. Since we have small number of observations but large number of predictors, using flexible method may overfit the data which is not an optimal choice. Also, for small data size, complex model is hard to interpret and explain. 
+
+
+c.
+Better. Since the relationship between predictors and outcome is non-linear, incereasing complexity of model and using flexible method will better fit the data.
+
+
+d.
+Worse, since the variance of error is high, consider to the trade off between bias and variance, we probably need simplify model to decrease the variance. 
+
+
+## Question 2
+### Data Exploration and Cleaning  
+Based on numerical summary and data plot, we noticed some possible data entry errors in variables, such as BMI has many 0 values. Also, some variables did not have obvious difference between two groups of outcome, sich as skin thickness. Therefore, we decided to clean data to prepare for further analysis. 
+```{r}
+# load the datasets
+train = read.csv("diabetes_train.csv") %>% mutate(Outcome = as.factor(Outcome))
+test = read.csv("diabetes_test.csv") %>% mutate(Outcome = as.factor(Outcome))
+
+summary(train) # check missing values and data pattern
+dim(train)
+dat.explore = gather(train, key = "Variable", value = "Value", -c("Outcome"))
+
+ggplot(dat.explore) + geom_boxplot(aes(x = Outcome, y = Value)) + facet_wrap(.~Variable, scales = "free_y") + theme_minimal()
+```
+
+
+First, we tried deleting observations with any missing value, and it resulted that observations decreased from 428 to 209. In that case, we didn't think those 209 samples were representative for the whole dataset. In next analysis part, we also tried using the 209 samples fit KNN model, but the best choice for K is 1 which is not a useful model for us due to model complexity. 
+
+```{r}
+# delete observations with data entry error
+train1 = train %>%
+  filter(Glucose>0, BloodPressure>0, BMI>0, SkinThickness>0, Insulin>0)
+
+test1 = test %>%
+  filter(Glucose>0, BloodPressure>0, BMI>0, SkinThickness>0, Insulin>0)
+
+dim(train1)
+
+```
+
+
+Finally, we decided to remove two variables (i.e.insurlin and skin thickness) rather than deleting observations with any missing value, because above two variables did not have obvious difference in two groups of outcomes. Also, we deleted four observations in the training dataset since those observations have at least two variables with missing values. We applied same method for testing data as well.
+
+After cleaning data, training dataset ended with 6 (predictor) variables and 424 observations. 
+
+```{r}
+# delete variables without obvious difference in two groups of outcomes
+train2 = train %>% select(-c("Insulin", "SkinThickness")) %>% filter(BloodPressure>0 | BMI>0)
+test2 = test %>% select(-c("Insulin", "SkinThickness")) %>% filter(BloodPressure>0 | BMI>0)
+dim(train2)
+
+```
+
+
+### KNN Classification
+We used KNN to calsiffy the outcome with 6 variables. Since the predictors are of different units and scales, we standardized variables first and then considered K from 1 to 20 in order to find best classification. At last, with table and plot below, we found K= 8 is an optimal choice for KNN classificaton with lowerst test error rate. 
+
+
+```{r}
+# pull out the outcome variable and the designing matrix for the training and test data
+train_label = train2 %>% .$Outcome 
+train_x = train2 %>% select(-"Outcome")
+
+test_label = test2 %>% .$Outcome 
+test_x = test2 %>% select(-"Outcome")
+
+```
+
+```{r}
+# scale both training and test data in the same way
+mean_train = colMeans(train_x)
+std_train = sqrt(diag(var(train_x)))
+# training data
+train_x = scale(train_x, center = mean_train, scale = std_train)
+# test data
+test_x = scale(test_x, center = mean_train, scale = std_train) 
+
+set.seed(503)
+```
+
+
+
+```{r}
+# look for a best k to minimize training error 
+k_range = 1:20
+train_error = c()
+test_error = c()
+
+for(i in 1:length(k_range)){
+  pred_train <- knn(train_x, 
+                    train_x, 
+                    train_label, 
+                    k = k_range[i])
+  train_error[i] = mean(pred_train != train_label)
+  pred_test = knn(train_x, 
+                  test_x, 
+                  train_label, 
+                  k = k_range[i])
+  test_error[i] = mean(pred_test != test_label)
+} # for each iteration in the for loop, we fit a KNN regression model using the same dataset, 
+# with different choice of k as k[i]. We compute the training and testing error rate each round.
+
+errors = data.frame(train_error, test_error, k_range)
+
+ggplot(errors, aes(x = k_range)) + 
+  geom_line(aes(y = train_error), col = "red") + geom_point(aes(y = train_error), col = "red") +
+  geom_line(aes(y = test_error), col = "blue") + geom_point(aes(y = test_error), col = "blue") +
+  ylab("Error Rate") + xlab("K") + ggtitle("Training and test error rate for KNN") + theme_minimal()
+
+errors %>% arrange(test_error) # arrange error rate by decending test error rate
+``` 
+
+
+
+
+
