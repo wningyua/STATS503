@@ -1,0 +1,311 @@
+---
+title: "project_503"
+author: "Ningyuan Wang"
+date: "3/10/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(tidyverse)
+library(ggplot2)
+library(GGally)
+```
+
+
+
+## Read Data
+```{r cars}
+dat = read.csv("risk_factors_cervical_cancer.csv", header = T, na.strings = "?")# convert ? to NA
+dim(dat) # original: 858*36
+summary(dat)
+
+# create outcome variable
+names(dat)
+dat$Outcome = ifelse(dat$Hinselmann==1|dat$Schiller==1|dat$Citology==1|dat$Biopsy==1, 1, 0) %>% as.factor()
+summary(dat)
+
+# split in training and testing sets
+n = nrow(dat)
+set.seed(18)
+train_id = sample(seq(1, n, 1), floor(n*0.7))
+test = dat[-train_id, ]
+train = dat[train_id, ]
+
+```
+
+
+## EDA
+
+
+```{r}
+summary(train)
+names(train)
+
+# 1. delete variables due to same value for all rows, and therefore they are meaningless + unnecessary variables(Hinselmann, Schiller, Citology, Biopsy)
+
+train = train %>% dplyr::select(., -c(STDs.cervical.condylomatosis, STDs.pelvic.inflammatory.disease,STDs.genital.herpes, STDs.molluscum.contagiosum, STDs.AIDS,Hinselmann, Schiller,Citology, Biopsy))
+
+
+# 2. delte two variables with too many missing values
+train =  train %>% dplyr::select(.,-c(STDs..Time.since.first.diagnosis, STDs..Time.since.last.diagnosis))
+
+# 3. delete rows with multiple missing values
+train <- train %>% filter_at(vars(Hormonal.Contraceptives,Hormonal.Contraceptives..years., IUD, IUD..years., STDs, STDs..number., STDs.condylomatosis, STDs.vaginal.condylomatosis, STDs.vulvo.perineal.condylomatosis, STDs.syphilis, STDs.HIV, STDs.Hepatitis.B, STDs.HPV,),all_vars(!is.na(.)))
+
+# 4. delete rows with multiple missing values on smoking: delete ~90 in total 
+train <- train %>% filter_at(vars(Smokes, Smokes..years., Smokes..packs.year.), all_vars(!is.na(.)))
+summary(train)
+
+dim(train) #508*26
+table(train$Outcome)
+
+# complete-case data
+train_cleaned = drop_na(train)
+dim(train_cleaned) #462*26
+```
+# Check multicolinarity 
+
+1. Sexual Beahviours
+All three variables fine.
+
+2. Smoking
+No inconsistent result between three variables, and we may only keep Smokes..packs.year. in logistic regression.
+
+3. Hormonal contraceptives
+No inconsistent result between two variables, and we may only keep Hormonal.Contraceptives..years. in logistic regression.
+
+4. IUD
+Simiar to above, choose "IUD..years."
+
+4. STD
+"STDs", "STDs..number." and "STDs..Number.of.diagnosis"  are highly correlated, and "STDs..number." is the total number of the testing details. So, we prefer only keep "STDs..number."
+
+```{r}
+names(train)
+ggpairs(train[,c(2:4)]) # sexual behaviors: fine, keep three variables
+ggpairs(train[,c(5:7)]) # smoking 
+ggpairs(train[,c(8:9)]) # Hormonal.Contraceptives
+ggpairs(train[,c(10:11)]) # IUD
+ggpairs(train[,c(12:21)]) # STD
+ggpairs(train[,c(22:25)]) # Dxs, fine
+
+
+```
+
+# Oversampling 
+```{r}
+library(ROSE)
+names(train)
+table(train$Outcome) # 440  68 
+dim(train) # 508  26
+which(is.na(train))
+
+train_balanced <- ovun.sample(Outcome~., data=train, p=0.5, seed=18,          method="over")$data
+
+table(train_balanced$Outcome) # 400 405 
+dim(train_balanced) # it becomes a complete case, 805  26
+```
+
+
+# Logisitc Regression (use train_balanced)
+
+```{r}
+
+
+# Based on stepwise variable selection, we find a best model # based on AIC: 1057.8. Age can be deleted, but we decided to keep it consider to the context of the analysis
+mod_log = glm(Outcome ~ Age + Smokes..years. + Smokes..packs.year. + Hormonal.Contraceptives..years. +
+                IUD..years.+STDs..number. + Dx.HPV,
+              family = binomial, data = train_balanced)
+summary(mod_log)
+
+# prediction
+select_variables = c ("Age", "Smokes..years.", "Smokes..packs.year.", "Hormonal.Contraceptives..years.", "IUD..years.", "STDs..number.","Dx.HPV")
+
+
+# performance in training: 0.6037267
+pred = predict(mod_log, train_balanced[, select_variables])
+predProbs = binomial()$linkinv(pred)
+pred_log = rep(0L, nrow(train_balanced))
+pred_log[predProbs > .5] = 1L
+table(pred_log, train_balanced$Outcome)
+sum(pred_log != train_balanced$Outcome) / nrow(train_balanced)
+
+# performance in testing: accuracy = 0.751938
+pred = predict(mod_log, test[, select_variables])
+head(pred)
+predProbs = binomial()$linkinv(pred)
+pred_log = rep(0L, nrow(test))
+pred_log[predProbs > .5] = 1L
+log_matrix = table(pred_log, test$Outcome)
+err_log = sum(pred_log != test$Outcome) / nrow(test)
+1- err_log 
+
+
+# sensitivity and specificity
+sensitivity = log_matrix[2,2] / sum(log_matrix[1,2]+log_matrix[2,2] ) #0.4444444
+specificity =  log_matrix[1,1] / sum(log_matrix[1,1]+log_matrix[1,2] ) #0.9238579
+
+library(pROC)
+roccurve <- roc(test$Outcome ~ pred_log)
+plot(roccurve)
+auc(roccurve)
+
+```
+
+
+
+# Feature Importance in Logisitic model
+To assess the relative importance of individual predictors in the model, we can also look at the absolute value of the t-statistic for each model parameter. 
+
+```{r}
+# use full model to check importane
+library(caret)
+mod_imp <- train(Outcome ~ Age + Smokes..years. + Smokes..packs.year. + Hormonal.Contraceptives..years. +
+                IUD..years.+STDs..number. + Dx.HPV,  data=train_balanced, method="glm", family="binomial")
+varImp(mod_imp)
+```
+
+```{r, logistic_plots}
+# make plots
+x_logisitic<-varImp(mod_imp)
+
+# Convert the variable importance data into a dataframe
+importance<- x_logisitic$importance %>% as.data.frame() 
+importance$Feature = c("Age", "Smokes..years.","Smokes..packs.year.","Hormonal.Contraceptives..years.", "IUD..years.","STDs..number.", "Dx.HPV")
+
+ 
+
+# Relabel the data
+colnames(importance)<- c('Importance', 'Feature')
+
+# Order the data from greatest importance to least important
+importance <- transform(importance, Feature = reorder(Feature, Importance))
+
+
+# Plot the data with ggplot.
+library(ggplot2)
+ggplot(data=importance, aes(x=Feature, y=Importance)) +
+  geom_bar(stat = 'identity',colour = "royalblue1", fill = "royalblue1", width = 0.6) + coord_flip() + labs(title = "Feature Importance in Logisitic Regression") +  theme_bw() + theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), axis.ticks = element_line(color = "grey60"), plot.title = element_text(hjust = 3), text = element_text(size = 9, face = "bold"))
+
+
+```
+
+
+
+
+
+
+Tree model with Gini
+```{r}
+library(rpart)
+library(rpart.plot)  
+library(rattle)
+# balance the labels
+prop = table(train$Outcome) / dim(train)[1]
+w = rep(1/prop[2], dim(train)[1])
+w[which(train$Outcome == 0)] = 1/prop[1]
+
+# tree model
+tree1 = rpart(Outcome ~ Age + Number.of.sexual.partners + First.sexual.intercourse + Num.of.pregnancies + Smokes + Smokes..years. + Smokes..packs.year. + Hormonal.Contraceptives + Hormonal.Contraceptives..years. + IUD + IUD..years. + STDs + STDs..number. + STDs.condylomatosis + STDs.vaginal.condylomatosis + STDs.vulvo.perineal.condylomatosis + STDs.syphilis + STDs.HIV + STDs.Hepatitis.B + STDs.HPV + STDs..Number.of.diagnosis + Dx.Cancer + Dx.CIN + Dx.HPV + Dx, train, parms = list(split = "gini"), method = "class", weights = w)
+plotcp(tree1)
+prp(tree1, type = 4, extra = 1, clip.right.labs = F)
+
+# test error
+test.pred = predict(tree1, test, type = "class")
+sum(test.pred!=test$Outcome) / dim(test)[1] # test
+# error, 0.3953488
+tree1_matrix = table(test.pred,test$Outcome )
+
+
+#  sensitivity and specificity
+sensitivity = tree1_matrix[2,2] / sum(tree1_matrix[1,2]+tree1_matrix[2,2] ) #0.5925926
+specificity =  tree1_matrix[1,1] / sum(tree1_matrix[1,1]+tree1_matrix[1,2] ) #0.9271523
+
+
+roccurve <- roc(test$Outcome ~ as.numeric(test.pred)-1)
+plot(roccurve)
+auc(roccurve)#0.5993
+
+
+
+
+
+
+
+#### use oversampling data
+tree2 = rpart(Outcome ~ Age + Number.of.sexual.partners + First.sexual.intercourse + Num.of.pregnancies + Smokes + Smokes..years. + Smokes..packs.year. + Hormonal.Contraceptives + Hormonal.Contraceptives..years. + IUD + IUD..years. + STDs + STDs..number. + STDs.condylomatosis + STDs.vaginal.condylomatosis + STDs.vulvo.perineal.condylomatosis + STDs.syphilis + STDs.HIV + STDs.Hepatitis.B + STDs.HPV + STDs..Number.of.diagnosis + Dx.Cancer + Dx.CIN + Dx.HPV + Dx, train_balanced, parms = list(split = "gini"), method = "class")
+plotcp(tree2)
+prp(tree2, type = 4, extra = 1, clip.right.labs = F)
+
+# test error
+test.pred2 = predict(tree2, test, type = "class")
+sum(test.pred2!=test$Outcome) / dim(test)[1] # test
+# accuracy: 0.6589147
+tree2_matrix = table(test.pred2,test$Outcome )
+
+sensitivity = tree2_matrix[2,2] / sum(tree2_matrix[1,2]+tree2_matrix[2,2] ) #0.2592593
+specificity =  tree2_matrix[1,1] / sum(tree2_matrix[1,1]+tree2_matrix[1,2] ) #0.8907104
+
+# AUC
+roccurve <- roc(test$Outcome ~ as.numeric(pred_log)-1)
+plot(roccurve)
+auc(roccurve)#0.6162
+
+
+``` 
+
+Random Forest
+```{r}
+library(randomForest)
+set.seed(18)
+rf = randomForest(Outcome ~ Age + Number.of.sexual.partners + First.sexual.intercourse + Num.of.pregnancies + Smokes + Smokes..years. + Smokes..packs.year. + Hormonal.Contraceptives + Hormonal.Contraceptives..years. + IUD + IUD..years. + STDs + STDs..number. + STDs.condylomatosis + STDs.vaginal.condylomatosis + STDs.vulvo.perineal.condylomatosis + STDs.syphilis + STDs.HIV + STDs.Hepatitis.B + STDs.HPV + STDs..Number.of.diagnosis + Dx.Cancer + Dx.CIN + Dx.HPV + Dx, data = train_balanced, importance = TRUE)
+
+varImp(rf) %>% head(10)
+varImpPlot(rf) %>% head(5)
+
+# test error 
+rf_test_pred = predict(rf, newdata  = test)
+dd = cbind(rf_test_pred, test$Outcome)
+dd = na.omit(dd) %>% as.data.frame()
+colnames(dd) = c("predict", "truth")
+
+rf_matrix = table(dd$predict, dd$truth)
+rf_test_err = mean(dd$predict!=dd$truth)
+rf_test_err # 0.1504854
+
+sensitivity = rf_matrix[2,2] / sum(rf_matrix[1,2]+rf_matrix[2,2] ) #0.1666667
+specificity =  rf_matrix[1,1] / sum(rf_matrix[1,1]+rf_matrix[1,2] ) #0.895288
+
+
+```
+
+
+
+## Ada boosting : do not work here!
+
+```{r}
+# library(gbm)
+# set.seed(18)
+# ada = gbm(Outcome~Age + Number.of.sexual.partners + First.sexual.intercourse + Num.of.pregnancies + Smokes + Smokes..years. + Smokes..packs.year. + Hormonal.Contraceptives + Hormonal.Contraceptives..years. + IUD + IUD..years. + STDs + STDs..number. + STDs.condylomatosis + STDs.vaginal.condylomatosis + STDs.vulvo.perineal.condylomatosis + STDs.syphilis + STDs.HIV + STDs.Hepatitis.B + STDs.HPV + STDs..Number.of.diagnosis + Dx.Cancer + Dx.CIN + Dx.HPV + Dx, data = train_balanced, distribution = "adaboost", n.trees = 5000, interaction.depth = 5)
+# summary(ada)
+# predict(ada, newdata = train_balanced, n.trees = 5000, 
+#                             type = "response")
+# # testing error
+# ada_pred_response = predict(ada, newdata = test, n.trees = 5000,  type = "response")
+# 
+# table(ada_pred_response,test$Outcome)
+
+```
+
+
+# SVM
+
+```{r}
+# library(e1071)
+# tune.out =tune(svm, Outcome~., data=train_balanced, ranges=list(cost=c(0.1,1,10,100), kernel=c("linear", "radial")))
+# summary(tune.out)
+```
+
+
