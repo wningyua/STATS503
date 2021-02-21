@@ -1,0 +1,140 @@
+---
+title: "HW4_503"
+author: "Ningyuan Wang"
+date: "3/12/2020"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Question 2
+We split data into training and testing sets and check the values of each variable. There is no werid patterns of variable based on checking. 
+
+Based on the context of the problem, besides of overall testing error, we think the banking is also interested in if the product (bank term deposit) would be subscribed. Therefore, we tried to minimize the overall testing error and testing error among all “yes”s, because they don’t want to lose their potential clients and want to perform better service for potential clients. 
+```{r cars}
+# load the data and split into training and testing sets
+set.seed(503)
+train = read.csv("bank_marketing_train.csv", header = T)
+test = read.csv("bank_marketing_test.csv", header = T)
+
+# EDA
+table(train$deposit)
+summary(train)
+
+```
+
+###a.	Tree Model
+
+In the optimal tree model with Gini splitting, the overall testing error was 18.12%; the error rate among all “no” clients was 23.78%; the error rate among all “yes” clients was 11.97%.
+
+```{r }
+library(rpart)
+library(rpart.plot)
+library(rattle)
+
+# use gini 
+tree1 = rpart(deposit ~., train, parms = list(split = "gini"), method = "class")
+
+```
+
+
+```{r}
+# test error
+test.pred = predict(tree1, test, type = "class")
+sum(test.pred!=test$deposit) / dim(test)[1] # test error
+
+# misclassification among "no"s
+test.no = test[test$deposit=="no", ]
+sum(test.pred[1605:3349]!="no") / dim(test.no)[1] #0.2378223
+
+# misclassfication among "yes"s
+test.yes = test[test$deposit=="yes", ]
+sum(test.pred[1:1604]!="yes")/dim(test.yes)[1] #0.1197007
+
+```
+
+###b.
+
+We tried several models to prune the terminal nodes under 8, which cp should be larger than 0.019. The plot of subtree of the optimal tree shown as follow. In this tree model, the useful variables were duration, contact, month and housing. 
+```{r}
+plotcp(tree1)
+tree2 = rpart(deposit ~., train, parms = list(split = "gini"), method = "class", cp = 0.019)
+prp(tree2, type = 4, extra = 1, clip.right.labs = F)
+
+```
+
+###c. Random Forest
+
+We tried several random forest models and controlled the effect of mtry, nodesize and ntree in different levels.  mtry refers to the number of variables randomly sampled as candidates at each split, and the default value was square root of predictors. Nodesize refers to the minimum size of terminal nodes, the larger node size caused less computing time. Ntree refers to the number of trees to grow, which being preferred a large number to ensure that every input row gets predicted at least a few times.  
+
+We tried models back and forth. For example, controlled the effect of mtry and nodesize, increasing the ntree from 500 to 1000 will increase the testing error; controlled the effect of mtry and ntree, increasing the nodesize from 1 to 2 will decrease the testing error. 
+
+Finally, the optimal model gave us overall testing error at 14.30%, the error among all “no” was 17.77%, and the error among all “yes” was 10.54%. In general, the random forest models improved the performance than using single tree.  The useful variables in the optimal model were duration, month, contact and balance. 
+
+```{r}
+library(randomForest)
+set.seed(503)
+rf_deposit = randomForest(deposit~., data = train, importance = TRUE, ntree = 500) # use 4 classifier
+# importance(rf_deposit)
+varImpPlot(rf_deposit)
+
+# test performance
+rf_test_pred = predict(rf_deposit, newdata = test)
+table(rf_test_pred, test$deposit)
+rf_test_err = mean(rf_test_pred!=test$deposit)
+rf_test_err 
+
+# misclassification among "no"s
+test.no = test[test$deposit=="no", ]
+sum(rf_test_pred[1605:3349]!="no") / dim(test.no)[1]
+
+# misclassfication among "yes"s
+test.yes = test[test$deposit=="yes", ]
+sum(rf_test_pred[1:1604]!="yes")/dim(test.yes)[1] 
+
+
+```
+
+
+###d. Boosting
+We applied AdaBoost algorithm and controlled depth, shrinkage and ntrees in different levels. We found that the decrease of shrinkage will train a better model and therefore better performance in the testing error. However, large ntrees and depth will cause overfitting issue, which may increase the testing error. The optimal model by Adaboost gave us the testing error at 13.97%; the error among all “no” s was 13.97% and the error among all “yes”s was 14.61%. The useful variables were duration, month, poutcome, job and contact. 
+
+```{r}
+library(gbm)
+set.seed(503)
+train$deposit = ifelse(train$deposit=="yes",1,0)
+test$deposit = ifelse(test$deposit=="yes",1,0)
+ada_deposit = gbm(deposit~., data = train, distribution = "adaboost", n.trees = 500, interaction.depth = 3, shrinkage = 0.1)
+summary(ada_deposit,) 
+
+ada_pred_response = predict(ada_deposit, newdata = test,type = "response", n.trees = 500)
+
+
+# test performance
+ada_pred = ifelse(ada_pred_response>0.5,1,0)
+table(ada_pred,test$deposit)
+ada_test_err = mean(ada_pred!=test$deposit)
+ada_test_err # 0.1397432
+
+# misclassification among "no"s
+mean(ada_pred[1605:3349]!=0)  # 0.1397432
+
+# misclassfication among "yes"s
+mean(ada_pred[1:1604]!=1)  #0.1461318
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+
